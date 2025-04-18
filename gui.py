@@ -33,21 +33,33 @@ from PyQt5.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QKeySequence
 
 from extract import extract_features
 
+import requests, mimetypes, threading    # new
+from pathlib import Path                 # convenience
+
+# ---------- API Gateway -------------
+API_BASE = "https://j9vpiapm5g.execute-api.us-west-2.amazonaws.com/prod"
+UPLOAD_EP = f"{API_BASE}/get-upload-videos"         # POST
+STATS_EP  = f"{API_BASE}/update-stats"              # POST
+API_KEY   = "bzHBw3C3nPXKqh0FZXajjlOED82PS0uM"
+TIMEOUT   = (5, 120)                                # (connect, read) seconds
+HEADERS   = {"x-api-key": API_KEY} if API_KEY else {}
+
+
 
 def run_pose_estimation(video_path, output_path, model_path):
     """Run the pose estimation script (pe_cli.py) on the input video"""
     print(f"Running pose estimation on {video_path}...")
 
+    # Build the path to pe_cli.py next to this file:
+    script = os.path.join(os.path.dirname(__file__), "pe_cli.py")
+
     # Build the command
     cmd = [
-        "python",
-        "pe_cli.py",
-        "--video",
-        video_path,
-        "--output",
-        output_path,
-        "--model",
-        model_path,
+        sys.executable,      # e.g. "/usr/local/bin/python3.12"
+        script,
+        "--video",  video_path,
+        "--output", output_path,
+        "--model",  model_path,
     ]
 
     print(f"Running command: {' '.join(cmd)}")
@@ -664,6 +676,71 @@ class VideoLibraryItem(QWidget):
             painter.setPen(QColor(220, 220, 220))
             painter.drawText(text_x, text_y, self.video_name)
 
+class UploadThread(QThread):
+    progress   = pyqtSignal(int, int)     # current, total
+    finished   = pyqtSignal(bool, str)    # ok, message
+
+    def __init__(self, video_paths, parent=None):
+        super().__init__(parent)
+        self.video_paths = video_paths
+
+    def run(self):
+        try:
+            total = len(self.video_paths)
+            for idx, vpath in enumerate(self.video_paths, 1):
+                filename = Path(vpath).name
+
+                # --- 1. ask API for a presigned‑POST ------------
+                resp = requests.post(
+                    UPLOAD_EP,
+                    json={"filename": filename},
+                    headers=HEADERS,
+                    timeout=TIMEOUT
+                )
+                resp.raise_for_status()
+
+                # --- 2. multipart/form-data POST to S3 ------------
+                # dump the raw presign response so you can see exactly what shape it is
+                print(f"[DEBUG] presign response: {resp.text}")
+
+                payload = resp.json()
+                # if your Gateway is proxy‑wrapping, unwrap the JSON string in "body"
+                if isinstance(payload, dict) and "body" in payload:
+                    payload = json.loads(payload["body"])
+
+                # now payload must have "url" and "fields"
+                upload_url = payload["url"]
+                fields     = payload["fields"]
+
+                with open(vpath, "rb") as f:
+                    files = {"file": (filename, f)}
+                    upload_resp = requests.post(
+                        upload_url,
+                        data=fields,
+                        files=files,
+                        timeout=TIMEOUT
+                    )
+                upload_resp.raise_for_status()
+
+                # --- 3. notify back‑end that stats changed ---------
+                requests.post(
+                    STATS_EP,
+                    json={
+                        "user_id": "demo-user",
+                        "videos_uploaded": 1,
+                        "minutes_uploaded": 0,
+                        "words_translated": 0
+                    },
+                    headers=HEADERS,
+                    timeout=TIMEOUT
+                )
+
+                # --- 4. emit UI progress ---------------------------
+                self.progress.emit(idx, total)
+
+            self.finished.emit(True, f"Uploaded {total} file(s) successfully ✔")
+        except Exception as e:
+            self.finished.emit(False, f"Upload failed: {e}")
 
 class ASLAnnotator(QMainWindow):
     """Main application window for ASL video processing and annotation"""
@@ -870,19 +947,28 @@ class ASLAnnotator(QMainWindow):
         layout.addStretch()
 
     def upload_to_aws(self):
-        """Dummy function to simulate uploading to AWS"""
-        # Show a message indicating upload started
-        self.library_status.setText("Uploading to AWS...")
+        if not getattr(self, "asl_videos", None):
+            QMessageBox.information(self, "Nothing to upload",
+                                    "No ASL‑positive videos to upload.")
+            return
 
-        # Simulate upload delay with a timer
-        def upload_complete():
-            self.library_status.setText("Upload to AWS completed successfully!")
-            QMessageBox.information(
-                self, "Upload Complete", "Videos successfully uploaded to AWS."
-            )
+        # show / reset progress UI
+        self.library_processing_frame.setVisible(True)
+        self.library_status.setText("Uploading to AWS…")
+        self.library_progress_bar.setValue(0)
 
-        # Simulate a delay of 2 seconds
-        QTimer.singleShot(2000, upload_complete)
+        # spin up worker thread
+        self.uploader = UploadThread(self.asl_videos, self)
+        self.uploader.progress.connect(
+            lambda cur, tot: self.library_progress_bar.setValue(int(100*cur/tot))
+        )
+        self.uploader.finished.connect(self._upload_done)
+        self.uploader.start()
+
+    def _upload_done(self, ok: bool, msg: str):
+        self.library_status.setText(msg)
+        self.library_processing_frame.setVisible(False)
+        QMessageBox.information(self, "Upload result", msg)
 
     def create_library_screen(self):
         """Create the video library screen"""

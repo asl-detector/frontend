@@ -2,6 +2,7 @@ import numpy as np
 
 
 def extract_features(window_data, fps):
+    """Given a window of data and fps, extract features from the data."""
     right_hands = []
     left_hands = []
     frame_counts = 0

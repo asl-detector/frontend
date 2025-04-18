@@ -31,7 +31,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QRect
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QKeySequence
 
-# Import from existing backend
 from extract import extract_features
 
 
@@ -66,6 +65,19 @@ def run_pose_estimation(video_path, output_path, model_path):
     except subprocess.CalledProcessError as e:
         print(f"Error running pose estimation: {e}")
         return None
+
+
+def fetch_model_from_s3(model_path):
+    """Fetch the model file from S3 bucket"""
+    # Placeholder function to simulate fetching from S3
+    # In a real implementation, you would use boto3 or similar library to fetch the file
+    print(f"Fetching model from S3: {model_path}")
+    # Simulate a delay for fetching
+    import time
+
+    time.sleep(2)
+    print("Model fetched successfully")
+    return model_path
 
 
 def load_model(model_path):
@@ -711,8 +723,8 @@ class ASLAnnotator(QMainWindow):
         self.output_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "output"
         )
-        self.model_path = "asl_model_xgboost.pkl"
-        self.mediapipe_model_path = "./tasks/hand_landmarker.task"
+        self.model_path = "models/asl_model_xgboost.pkl"
+        self.mediapipe_model_path = "tasks/hand_landmarker.task"
 
         # Video playback variables
         self.video_capture = None

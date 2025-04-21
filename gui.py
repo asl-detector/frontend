@@ -740,12 +740,13 @@ class VideoLibraryItem(QWidget):
             painter.drawText(text_x, text_y, self.video_name)
 
 class UploadThread(QThread):
-    progress   = pyqtSignal(int, int)     # current, total
-    finished   = pyqtSignal(bool, str)    # ok, message
+    progress = pyqtSignal(int, int)    # current, total
+    finished = pyqtSignal(bool, str)   # success flag, message
 
-    def __init__(self, video_paths, parent=None):
+    def __init__(self, video_paths, annotations_dir, parent=None):
         super().__init__(parent)
         self.video_paths = video_paths
+        self.annotations_dir = annotations_dir
 
     def run(self):
         try:
@@ -753,7 +754,7 @@ class UploadThread(QThread):
             for idx, vpath in enumerate(self.video_paths, 1):
                 filename = Path(vpath).name
 
-                # --- 1. ask API for a presigned‑POST ------------
+                # --- 1) presign & upload the video as before ------------
                 resp = requests.post(
                     UPLOAD_EP,
                     json={"filename": filename},
@@ -761,17 +762,9 @@ class UploadThread(QThread):
                     timeout=TIMEOUT
                 )
                 resp.raise_for_status()
-
-                # --- 2. multipart/form-data POST to S3 ------------
-                # dump the raw presign response so you can see exactly what shape it is
-                print(f"[DEBUG] presign response: {resp.text}")
-
                 payload = resp.json()
-                # if your Gateway is proxy‑wrapping, unwrap the JSON string in "body"
                 if isinstance(payload, dict) and "body" in payload:
                     payload = json.loads(payload["body"])
-
-                # now payload must have "url" and "fields"
                 upload_url = payload["url"]
                 fields     = payload["fields"]
 
@@ -785,7 +778,34 @@ class UploadThread(QThread):
                     )
                 upload_resp.raise_for_status()
 
-                # --- 3. notify back‑end that stats changed ---------
+                # --- 2) now look for and upload the matching annotations JSON ---
+                ann_name = f"{Path(vpath).stem}_annotations.json"
+                ann_path = Path(self.annotations_dir) / ann_name
+                if ann_path.exists():
+                    resp = requests.post(
+                        UPLOAD_EP,
+                        json={"filename": f"annotations/{ann_name}"},
+                        headers=HEADERS,
+                        timeout=TIMEOUT
+                    )
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    if isinstance(payload, dict) and "body" in payload:
+                        payload = json.loads(payload["body"])
+                    upload_url = payload["url"]
+                    fields     = payload["fields"]
+
+                    with open(ann_path, "rb") as f:
+                        files = {"file": (ann_name, f, "application/json")}
+                        upload_resp = requests.post(
+                            upload_url,
+                            data=fields,
+                            files=files,
+                            timeout=TIMEOUT
+                        )
+                    upload_resp.raise_for_status()
+
+                # --- 3) notify stats (unchanged) ---
                 requests.post(
                     STATS_EP,
                     json={
@@ -798,10 +818,10 @@ class UploadThread(QThread):
                     timeout=TIMEOUT
                 )
 
-                # --- 4. emit UI progress ---------------------------
+                # --- 4) update UI progress (unchanged) ---
                 self.progress.emit(idx, total)
 
-            self.finished.emit(True, f"Uploaded {total} file(s) successfully ✔")
+            self.finished.emit(True, f"Uploaded {total} file(s) successfully ✔")
         except Exception as e:
             self.finished.emit(False, f"Upload failed: {e}")
 
@@ -1024,13 +1044,14 @@ class ASLAnnotator(QMainWindow):
                                     "No ASL‑positive videos to upload.")
             return
 
-        # show / reset progress UI
         self.library_processing_frame.setVisible(True)
         self.library_status.setText("Uploading to AWS…")
         self.library_progress_bar.setValue(0)
 
-        # spin up worker thread
-        self.uploader = UploadThread(self.asl_videos, self)
+        self.uploader = UploadThread(self.asl_videos, self.output_dir, self)
+        # pass in output_dir so the thread can find *_annotations.json
+        self.uploader = UploadThread(self.asl_videos, self.output_dir, self)
+
         self.uploader.progress.connect(
             lambda cur, tot: self.library_progress_bar.setValue(int(100*cur/tot))
         )

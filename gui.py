@@ -37,7 +37,7 @@ import requests, mimetypes, threading    # new
 from pathlib import Path                 # convenience
 
 # ---------- API Gateway -------------
-API_BASE = "https://j9vpiapm5g.execute-api.us-west-2.amazonaws.com/prod"
+API_BASE = "https://yblv8mw15l.execute-api.us-west-2.amazonaws.com/PROD"
 UPLOAD_EP = f"{API_BASE}/get-upload-videos"         # POST
 STATS_EP  = f"{API_BASE}/update-stats"              # POST
 API_KEY   = "bzHBw3C3nPXKqh0FZXajjlOED82PS0uM"

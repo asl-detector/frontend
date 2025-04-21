@@ -1,6 +1,10 @@
+import shutil
 import sys
 import os
 import json
+import tarfile
+import tempfile
+
 import cv2
 import pandas as pd
 import subprocess
@@ -40,6 +44,7 @@ from pathlib import Path                 # convenience
 API_BASE = "https://yblv8mw15l.execute-api.us-west-2.amazonaws.com/PROD"
 UPLOAD_EP = f"{API_BASE}/get-upload-videos"         # POST
 STATS_EP  = f"{API_BASE}/update-stats"              # POST
+DOWNLOAD_EP = f"{API_BASE}/get-download-model-weights_URL"   # POST
 API_KEY   = "bzHBw3C3nPXKqh0FZXajjlOED82PS0uM"
 TIMEOUT   = (5, 120)                                # (connect, read) seconds
 HEADERS   = {"x-api-key": API_KEY} if API_KEY else {}
@@ -80,16 +85,74 @@ def run_pose_estimation(video_path, output_path, model_path):
 
 
 def fetch_model_from_s3(model_path):
-    """Fetch the model file from S3 bucket"""
-    # Placeholder function to simulate fetching from S3
-    # In a real implementation, you would use boto3 or similar library to fetch the file
-    print(f"Fetching model from S3: {model_path}")
-    # Simulate a delay for fetching
-    import time
+    """
+    Download 'initial-model.tar.gz' from your API Gateway,
+    extract the member named 'xgboost-model' (no extension),
+    and overwrite model_path with it.
+    Returns True on success, False otherwise.
+    """
+    archive_name = "initial-model.tar.gz"
+    try:
+        # 1) Get presigned URL for the tarball
+        resp = requests.post(
+            DOWNLOAD_EP,
+            json={"filename": archive_name},
+            headers=HEADERS,
+            timeout=TIMEOUT
+        )
+        resp.raise_for_status()
 
-    time.sleep(2)
-    print("Model fetched successfully")
-    return model_path
+        payload = resp.json()
+        if isinstance(payload, dict) and "body" in payload:
+            payload = json.loads(payload["body"])
+
+        download_url = payload.get("url") or payload.get("download_url")
+        if not download_url:
+            print(f"[fetch_model] no URL in response: {payload}")
+            return False
+
+        # 2) Download the tar.gz to a temp file
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+            dl = requests.get(download_url, stream=True, timeout=TIMEOUT)
+            dl.raise_for_status()
+            for chunk in dl.iter_content(8192):
+                tmp.write(chunk)
+            tmp_path = Path(tmp.name)
+
+        # 3) Extract only the 'xgboost-model' member
+        with tarfile.open(tmp_path, "r:gz") as tar:
+            member = next((m for m in tar.getmembers() if Path(m.name).name == "xgboost-model"), None)
+            if member is None:
+                print(f"[fetch_model] 'xgboost-model' not found in archive")
+                tmp_path.unlink(missing_ok=True)
+                return False
+
+            with tempfile.TemporaryDirectory() as extract_dir:
+                tar.extract(member, path=extract_dir)
+                extracted = Path(extract_dir) / member.name
+
+                # ensure output dir exists
+                dest = Path(model_path)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+
+                # overwrite
+                shutil.move(str(extracted), str(dest))
+
+        # 4) cleanup
+        tmp_path.unlink(missing_ok=True)
+        print(f"[fetch_model] model written to {model_path}")
+        return True
+
+    except requests.HTTPError as http_err:
+        if http_err.response.request.method == "POST":
+            print("❗ API Gateway 403: check DOWNLOAD_EP & x-api-key")
+        else:
+            print("❗ S3 GET 403: presigned URL invalid or expired")
+        return False
+
+    except Exception as e:
+        print(f"[fetch_model] unexpected error: {e}")
+        return False
 
 
 def load_model(model_path):
@@ -833,6 +896,15 @@ class ASLAnnotator(QMainWindow):
         # Setup playback timer
         self.playback_timer = QTimer(self)
         self.playback_timer.timeout.connect(self.update_video_frame)
+
+        # Attempt to fetch & extract the model to self.model_path
+        ok = fetch_model_from_s3(self.model_path)
+        if not ok:
+            QMessageBox.warning(
+                self,
+                "Download Error",
+                "Could not fetch and extract the ASL model from S3."
+            )
 
         # Load model
         try:

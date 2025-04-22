@@ -31,25 +31,26 @@ from PyQt5.QtWidgets import (
     QDialog,
     QTextEdit,
     QDialogButtonBox,
+    QCheckBox,
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QRect
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QKeySequence
 
+
 from extract import extract_features
 
-import requests, mimetypes, threading    # new
-from pathlib import Path                 # convenience
+import requests, mimetypes, threading  # new
+from pathlib import Path  # convenience
 
 # ---------- API Gateway -------------
 API_BASE = "https://yblv8mw15l.execute-api.us-west-2.amazonaws.com/PROD"
-UPLOAD_EP = f"{API_BASE}/get-upload-videos"         # POST
-STATS_EP  = f"{API_BASE}/update-stats"              # POST
-DOWNLOAD_EP = f"{API_BASE}/get-download-model-weights_URL"   # POST
+UPLOAD_EP = f"{API_BASE}/get-upload-videos"  # POST
+STATS_EP = f"{API_BASE}/update-stats"  # POST
+DOWNLOAD_EP = f"{API_BASE}/get-download-model-weights_URL"  # POST
 MONITOR_EP = f"{API_BASE}/get-upload-model-monitoring-data"  # POST
-API_KEY   = "bzHBw3C3nPXKqh0FZXajjlOED82PS0uM"
-TIMEOUT   = (5, 120)                                # (connect, read) seconds
-HEADERS   = {"x-api-key": API_KEY} if API_KEY else {}
-
+API_KEY = "bzHBw3C3nPXKqh0FZXajjlOED82PS0uM"
+TIMEOUT = (5, 120)  # (connect, read) seconds
+HEADERS = {"x-api-key": API_KEY} if API_KEY else {}
 
 
 def run_pose_estimation(video_path, output_path, model_path):
@@ -61,11 +62,14 @@ def run_pose_estimation(video_path, output_path, model_path):
 
     # Build the command
     cmd = [
-        sys.executable,      # e.g. "/usr/local/bin/python3.12"
+        sys.executable,  # e.g. "/usr/local/bin/python3.12"
         script,
-        "--video",  video_path,
-        "--output", output_path,
-        "--model",  model_path,
+        "--video",
+        video_path,
+        "--output",
+        output_path,
+        "--model",
+        model_path,
     ]
 
     print(f"Running command: {' '.join(cmd)}")
@@ -99,7 +103,7 @@ def fetch_model_from_s3(model_path):
             DOWNLOAD_EP,
             json={"filename": archive_name},
             headers=HEADERS,
-            timeout=TIMEOUT
+            timeout=TIMEOUT,
         )
         resp.raise_for_status()
 
@@ -122,7 +126,10 @@ def fetch_model_from_s3(model_path):
 
         # 3) Extract only the 'xgboost-model' member
         with tarfile.open(tmp_path, "r:gz") as tar:
-            member = next((m for m in tar.getmembers() if Path(m.name).name == "xgboost-model"), None)
+            member = next(
+                (m for m in tar.getmembers() if Path(m.name).name == "xgboost-model"),
+                None,
+            )
             if member is None:
                 print(f"[fetch_model] 'xgboost-model' not found in archive")
                 tmp_path.unlink(missing_ok=True)
@@ -740,9 +747,10 @@ class VideoLibraryItem(QWidget):
             painter.setPen(QColor(220, 220, 220))
             painter.drawText(text_x, text_y, self.video_name)
 
+
 class UploadThread(QThread):
-    progress = pyqtSignal(int, int)    # current, total
-    finished = pyqtSignal(bool, str)   # success flag, message
+    progress = pyqtSignal(int, int)  # current, total
+    finished = pyqtSignal(bool, str)  # success flag, message
 
     def __init__(self, video_paths, annotations_dir, parent=None):
         super().__init__(parent)
@@ -761,22 +769,19 @@ class UploadThread(QThread):
                     UPLOAD_EP,
                     json={"filename": filepath},
                     headers=HEADERS,
-                    timeout=TIMEOUT
+                    timeout=TIMEOUT,
                 )
                 resp.raise_for_status()
                 payload = resp.json()
                 if isinstance(payload, dict) and "body" in payload:
                     payload = json.loads(payload["body"])
                 upload_url = payload["url"]
-                fields     = payload["fields"]
+                fields = payload["fields"]
 
                 with open(vpath, "rb") as f:
                     files = {"file": (filename, f)}
                     upload_resp = requests.post(
-                        upload_url,
-                        data=fields,
-                        files=files,
-                        timeout=TIMEOUT
+                        upload_url, data=fields, files=files, timeout=TIMEOUT
                     )
                 upload_resp.raise_for_status()
 
@@ -788,22 +793,19 @@ class UploadThread(QThread):
                         UPLOAD_EP,
                         json={"filename": f"annotations/{ann_name}"},
                         headers=HEADERS,
-                        timeout=TIMEOUT
+                        timeout=TIMEOUT,
                     )
                     resp.raise_for_status()
                     payload = resp.json()
                     if isinstance(payload, dict) and "body" in payload:
                         payload = json.loads(payload["body"])
                     upload_url = payload["url"]
-                    fields     = payload["fields"]
+                    fields = payload["fields"]
 
                     with open(ann_path, "rb") as f:
                         files = {"file": (ann_name, f, "application/json")}
                         upload_resp = requests.post(
-                            upload_url,
-                            data=fields,
-                            files=files,
-                            timeout=TIMEOUT
+                            upload_url, data=fields, files=files, timeout=TIMEOUT
                         )
                     upload_resp.raise_for_status()
 
@@ -814,10 +816,10 @@ class UploadThread(QThread):
                         "user_id": "demo-user",
                         "videos_uploaded": 1,
                         "minutes_uploaded": 0,
-                        "words_translated": 0
+                        "words_translated": 0,
                     },
                     headers=HEADERS,
-                    timeout=TIMEOUT
+                    timeout=TIMEOUT,
                 )
 
                 # --- 4) update UI progress (unchanged) ---
@@ -825,35 +827,35 @@ class UploadThread(QThread):
 
                 # --- 5) now upload the landmarks JSON for model monitoring ---
                 lm_name = f"{Path(vpath).stem}_landmarks.json"
-                lm_path     = Path(self.annotations_dir) / lm_name
-                monitor_key = f"pose-data/asl/{lm_name}"      # ← include your desired prefix
+                lm_path = Path(self.annotations_dir) / lm_name
+                monitor_key = (
+                    f"pose-data/asl/{lm_name}"  # ← include your desired prefix
+                )
                 resp = requests.post(
                     MONITOR_EP,
-                    json={"filename": monitor_key},           # ← send the full key
+                    json={"filename": monitor_key},  # ← send the full key
                     headers=HEADERS,
-                    timeout=TIMEOUT
+                    timeout=TIMEOUT,
                 )
                 resp.raise_for_status()
                 payload = resp.json()
                 if isinstance(payload, dict) and "body" in payload:
                     payload = json.loads(payload["body"])
                 upload_url = payload["url"]
-                fields     = payload["fields"]
+                fields = payload["fields"]
 
                 print(monitor_key)
                 with open(lm_path, "rb") as f_lm:
                     files = {"file": (lm_name, f_lm, "application/json")}
                     upload_resp = requests.post(
-                        upload_url,
-                        data=fields,
-                        files=files,
-                        timeout=TIMEOUT
+                        upload_url, data=fields, files=files, timeout=TIMEOUT
                     )
                 upload_resp.raise_for_status()
 
             self.finished.emit(True, f"Uploaded {total} file(s) successfully ✔")
         except Exception as e:
             self.finished.emit(False, f"Upload failed: {e}")
+
 
 class ASLAnnotator(QMainWindow):
     """Main application window for ASL video processing and annotation"""
@@ -953,7 +955,7 @@ class ASLAnnotator(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Download Error",
-                "Could not fetch and extract the ASL model from S3."
+                "Could not fetch and extract the ASL model from S3.",
             )
 
         # Load model
@@ -1070,8 +1072,9 @@ class ASLAnnotator(QMainWindow):
 
     def upload_to_aws(self):
         if not getattr(self, "asl_videos", None):
-            QMessageBox.information(self, "Nothing to upload",
-                                    "No ASL‑positive videos to upload.")
+            QMessageBox.information(
+                self, "Nothing to upload", "No ASL‑positive videos to upload."
+            )
             return
 
         self.library_processing_frame.setVisible(True)
@@ -1083,7 +1086,7 @@ class ASLAnnotator(QMainWindow):
         self.uploader = UploadThread(self.asl_videos, self.output_dir, self)
 
         self.uploader.progress.connect(
-            lambda cur, tot: self.library_progress_bar.setValue(int(100*cur/tot))
+            lambda cur, tot: self.library_progress_bar.setValue(int(100 * cur / tot))
         )
         self.uploader.finished.connect(self._upload_done)
         self.uploader.start()
@@ -1947,8 +1950,91 @@ class ASLAnnotator(QMainWindow):
             self.video_capture.release()
 
 
+class TermsDialog(QDialog):
+    """Dialog to display Terms of Service, Privacy Policy, and Data Agreement"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Terms and Conditions")
+        self.setMinimumSize(700, 500)
+
+        # Create layout
+        layout = QVBoxLayout(self)
+
+        # Create tab widget for the different documents
+        tab_widget = QWidget()
+        tab_layout = QVBoxLayout(tab_widget)
+
+        # Tab selector
+        doc_selector = QHBoxLayout()
+        tos_btn = QPushButton("Terms of Service")
+        privacy_btn = QPushButton("Privacy Policy")
+        agreement_btn = QPushButton("Data Agreement")
+
+        doc_selector.addWidget(tos_btn)
+        doc_selector.addWidget(privacy_btn)
+        doc_selector.addWidget(agreement_btn)
+        tab_layout.addLayout(doc_selector)
+
+        # Text browser for content
+        self.text_browser = QTextEdit()
+        self.text_browser.setReadOnly(True)
+        tab_layout.addWidget(self.text_browser)
+
+        layout.addWidget(tab_widget)
+
+        # Add checkbox for agreement
+        self.agree_checkbox = QCheckBox(
+            "I have read and agree to the Terms of Service, Privacy Policy, and Data Agreement"
+        )
+        layout.addWidget(self.agree_checkbox)
+
+        # Add buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        # Disable OK button until checkbox is checked
+        self.ok_button = button_box.button(QDialogButtonBox.Ok)
+        self.ok_button.setEnabled(False)
+        self.agree_checkbox.stateChanged.connect(self.toggle_ok_button)
+
+        # Connect button clicks to show respective documents
+        tos_btn.clicked.connect(lambda: self.show_document("tos"))
+        privacy_btn.clicked.connect(lambda: self.show_document("privacy"))
+        agreement_btn.clicked.connect(lambda: self.show_document("data-agreement"))
+
+        # Default to showing TOS first
+        self.show_document("tos")
+
+    def toggle_ok_button(self, state):
+        """Enable OK button only when checkbox is checked"""
+        self.ok_button.setEnabled(state == Qt.Checked)
+
+    def show_document(self, doc_type):
+        """Display the selected document in the text browser"""
+        file_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), f"md/{doc_type}.md"
+        )
+
+        try:
+            with open(file_path, "r") as f:
+                content = f.read()
+                self.text_browser.setMarkdown(content)
+        except Exception as e:
+            self.text_browser.setPlainText(f"Error loading document: {str(e)}")
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = ASLAnnotator()
-    window.show()
-    sys.exit(app.exec_())
+
+    # Show terms dialog before main window
+    terms_dialog = TermsDialog()
+    if terms_dialog.exec_() == QDialog.Accepted:
+        window = ASLAnnotator()
+        window.show()
+        sys.exit(app.exec_())
+    else:
+        # User rejected the terms
+        sys.exit(0)

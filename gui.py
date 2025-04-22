@@ -45,6 +45,7 @@ API_BASE = "https://yblv8mw15l.execute-api.us-west-2.amazonaws.com/PROD"
 UPLOAD_EP = f"{API_BASE}/get-upload-videos"         # POST
 STATS_EP  = f"{API_BASE}/update-stats"              # POST
 DOWNLOAD_EP = f"{API_BASE}/get-download-model-weights_URL"   # POST
+MONITOR_EP = f"{API_BASE}/get-upload-model-monitoring-data"  # POST
 API_KEY   = "bzHBw3C3nPXKqh0FZXajjlOED82PS0uM"
 TIMEOUT   = (5, 120)                                # (connect, read) seconds
 HEADERS   = {"x-api-key": API_KEY} if API_KEY else {}
@@ -753,11 +754,12 @@ class UploadThread(QThread):
             total = len(self.video_paths)
             for idx, vpath in enumerate(self.video_paths, 1):
                 filename = Path(vpath).name
+                filepath = f"videos/{filename}"
 
                 # --- 1) presign & upload the video as before ------------
                 resp = requests.post(
                     UPLOAD_EP,
-                    json={"filename": filename},
+                    json={"filename": filepath},
                     headers=HEADERS,
                     timeout=TIMEOUT
                 )
@@ -820,6 +822,34 @@ class UploadThread(QThread):
 
                 # --- 4) update UI progress (unchanged) ---
                 self.progress.emit(idx, total)
+
+                # --- 5) now upload the landmarks JSON for model monitoring ---
+                lm_name = f"{Path(vpath).stem}_landmarks.json"
+                lm_path     = Path(self.annotations_dir) / lm_name
+                monitor_key = f"pose-data/asl/{lm_name}"      # ← include your desired prefix
+                resp = requests.post(
+                    MONITOR_EP,
+                    json={"filename": monitor_key},           # ← send the full key
+                    headers=HEADERS,
+                    timeout=TIMEOUT
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                if isinstance(payload, dict) and "body" in payload:
+                    payload = json.loads(payload["body"])
+                upload_url = payload["url"]
+                fields     = payload["fields"]
+
+                print(monitor_key)
+                with open(lm_path, "rb") as f_lm:
+                    files = {"file": (lm_name, f_lm, "application/json")}
+                    upload_resp = requests.post(
+                        upload_url,
+                        data=fields,
+                        files=files,
+                        timeout=TIMEOUT
+                    )
+                upload_resp.raise_for_status()
 
             self.finished.emit(True, f"Uploaded {total} file(s) successfully ✔")
         except Exception as e:
